@@ -5,12 +5,15 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { fetchWebhook } from "@/lib/api-client";
 import type { WebhookRecord } from "@/lib/types";
+import { apiErrorMessage } from "@/lib/api-error";
 import { isSocketsEnabled } from "@/lib/public-config";
 import { useWebhookSocket } from "@/hooks/use-webhook-socket";
+import { useToast } from "@/components/toast-provider";
 import { JsonPanel } from "@/components/json-panel";
 import { ConnectionPill } from "@/components/connection-pill";
 
 export default function WebhookDetailPage() {
+  const { showToast } = useToast();
   const socketsOn = isSocketsEnabled();
   const params = useParams();
   const id = typeof params.id === "string" ? params.id : "";
@@ -26,11 +29,9 @@ export default function WebhookDetailPage() {
     try {
       const env = await fetchWebhook(id);
       if (env.status === 404 || env.status === 400) {
-        setError(
-          typeof env.data === "object" && env.data && "message" in env.data
-            ? String((env.data as { message: string }).message)
-            : "Not found"
-        );
+        const msg = apiErrorMessage(env.status, env.data, "Not found");
+        setError(msg);
+        showToast(msg, "error");
         setRecord(null);
         return;
       }
@@ -38,13 +39,17 @@ export default function WebhookDetailPage() {
         setRecord(env.data.record);
         return;
       }
-      setError("Unexpected response");
+      const msg = apiErrorMessage(env.status, env.data, "Unexpected response");
+      setError(msg);
+      showToast(msg, "error");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      showToast(msg, "error");
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, showToast]);
 
   useEffect(() => {
     void load();
@@ -64,32 +69,49 @@ export default function WebhookDetailPage() {
         <Link href="/">← Back to live feed</Link>
       </p>
       <div className="toolbar" style={{ marginBottom: "0.75rem" }}>
-        {socketsOn ? (
-          <ConnectionPill mode="socket" connected={socketOk} />
-        ) : (
-          <ConnectionPill mode="http-only" />
-        )}
-        <span className="badge">GET /webhook/:id on load</span>
+        <div className="toolbar__start">
+          {socketsOn ? (
+            <ConnectionPill mode="socket" connected={socketOk} />
+          ) : (
+            <ConnectionPill mode="http-only" />
+          )}
+        </div>
         {!socketsOn ? (
-          <button
-            type="button"
-            className="btn btn--primary"
-            onClick={() => void load()}
-            disabled={loading}
-          >
-            Refresh (GET)
-          </button>
+          <div className="toolbar__actions">
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={() => void load()}
+              disabled={loading}
+            >
+              Reload
+            </button>
+          </div>
         ) : null}
       </div>
       <h1 className="page-title">Webhook</h1>
       {loading ? (
         <p className="page-lede">Loading…</p>
       ) : error ? (
-        <div className="error-banner">{error}</div>
+        <div className="empty-state">{error}</div>
       ) : record ? (
         <>
-          <p className="page-lede" style={{ marginBottom: "1rem" }}>
-            <code>{record.id}</code> · {new Date(record.createdAt).toLocaleString()}
+          <dl className="field-list" style={{ marginBottom: "1rem" }}>
+            <div className="field-row">
+              <dt className="field-label">Webhook ID</dt>
+              <dd className="field-value">
+                <code>{record.id}</code>
+              </dd>
+            </div>
+            <div className="field-row">
+              <dt className="field-label">Created at</dt>
+              <dd className="field-value">
+                {new Date(record.createdAt).toLocaleString()}
+              </dd>
+            </div>
+          </dl>
+          <p className="field-label" style={{ marginBottom: "0.35rem" }}>
+            Payload
           </p>
           <JsonPanel value={record.webhookData} />
         </>

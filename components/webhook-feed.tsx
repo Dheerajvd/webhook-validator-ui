@@ -1,12 +1,16 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { fetchWebhooks, postFlush } from "@/lib/api-client";
 import type { WebhookRecord } from "@/lib/types";
 import { isSocketsEnabled } from "@/lib/public-config";
+import { apiErrorMessage } from "@/lib/api-error";
+import { stringifyWebhookPayload } from "@/lib/webhook-json";
 import { useWebhookSocket } from "@/hooks/use-webhook-socket";
+import { useToast } from "@/components/toast-provider";
 import { ConnectionPill } from "./connection-pill";
+import { WebhookSidePanel } from "./webhook-side-panel";
+import { ConfirmDialog } from "./confirm-dialog";
 
 function previewPayload(data: unknown): string {
   if (data === null || data === undefined) return "";
@@ -19,32 +23,32 @@ function previewPayload(data: unknown): string {
 }
 
 export function WebhookFeed() {
+  const { showToast } = useToast();
   const socketsOn = isSocketsEnabled();
   const [records, setRecords] = useState<WebhookRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [socketOk, setSocketOk] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [panelRecord, setPanelRecord] = useState<WebhookRecord | null>(null);
+  const [flushDialogOpen, setFlushDialogOpen] = useState(false);
 
   const load = useCallback(async () => {
-    setError(null);
     try {
       const env = await fetchWebhooks();
       if (env.status !== 200) {
-        setError(
-          typeof env.data === "object" && env.data && "message" in env.data
-            ? String((env.data as { message: string }).message)
-            : `HTTP ${env.status}`
+        showToast(
+          apiErrorMessage(env.status, env.data, `Could not load webhooks (${env.status})`),
+          "error"
         );
         return;
       }
       setRecords(env.data.records);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      showToast(e instanceof Error ? e.message : String(e), "error");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     void load();
@@ -61,58 +65,85 @@ export function WebhookFeed() {
     setSocketOk
   );
 
-  async function onFlush() {
-    if (!confirm("Clear all captured webhooks from memory?")) return;
+  async function doFlush() {
     setBusy(true);
-    setError(null);
     try {
       const env = await postFlush();
       if (env.status !== 200) {
-        setError("Could not flush store");
+        showToast(
+          apiErrorMessage(env.status, env.data, "Could not clear list"),
+          "error"
+        );
         return;
       }
       setRecords([]);
+      setPanelRecord(null);
+      setFlushDialogOpen(false);
+      showToast("List cleared", "success");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      showToast(e instanceof Error ? e.message : String(e), "error");
     } finally {
       setBusy(false);
     }
   }
 
+  async function copyRecordPayload(r: WebhookRecord, e: React.MouseEvent) {
+    e.stopPropagation();
+    const text = stringifyWebhookPayload(r.webhookData);
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("Copied to clipboard", "success");
+    } catch {
+      showToast("Could not copy", "error");
+    }
+  }
+
   return (
     <>
+      <ConfirmDialog
+        open={flushDialogOpen}
+        onClose={() => !busy && setFlushDialogOpen(false)}
+        title="Clear list?"
+        description="Clears the list below. Saved backup files are not removed."
+        cancelLabel="Cancel"
+        confirmLabel="Clear list"
+        variant="danger"
+        busy={busy}
+        onConfirm={doFlush}
+      />
+
+      <WebhookSidePanel
+        record={panelRecord}
+        onClose={() => setPanelRecord(null)}
+      />
+
       <div className="toolbar">
-        {socketsOn ? (
-          <ConnectionPill mode="socket" connected={socketOk} />
-        ) : (
-          <ConnectionPill mode="http-only" />
-        )}
-        <button
-          type="button"
-          className="btn btn--primary"
-          onClick={() => void load()}
-          disabled={loading}
-        >
-          {socketsOn ? "Refresh from API" : "Refresh (GET /webhook)"}
-        </button>
-        <button
-          type="button"
-          className="btn btn--danger"
-          onClick={() => void onFlush()}
-          disabled={busy || loading}
-        >
-          Clear memory
-        </button>
+        <div className="toolbar__start">
+          {socketsOn ? (
+            <ConnectionPill mode="socket" connected={socketOk} />
+          ) : (
+            <ConnectionPill mode="http-only" />
+          )}
+        </div>
+        <div className="toolbar__actions">
+          <button
+            type="button"
+            className="btn btn--primary"
+            onClick={() => void load()}
+            disabled={loading}
+          >
+            Reload
+          </button>
+          <button
+            type="button"
+            className="btn btn--danger"
+            onClick={() => setFlushDialogOpen(true)}
+            disabled={busy || loading}
+          >
+            Clear list
+          </button>
+        </div>
       </div>
-
-      {!socketsOn ? (
-        <p className="config-hint" role="status">
-          Live sockets are off (<code>NEXT_PUBLIC_IS_SOCKETS_ENABLED=false</code>
-          ). Use <strong>Refresh</strong> to reload the list after new POSTs.
-        </p>
-      ) : null}
-
-      {error ? <div className="error-banner">{error}</div> : null}
 
       {loading ? (
         <p className="page-lede" style={{ marginTop: 0 }}>
@@ -120,30 +151,40 @@ export function WebhookFeed() {
         </p>
       ) : records.length === 0 ? (
         <div className="empty-state">
-          <p style={{ margin: "0 0 0.5rem" }}>No webhooks yet.</p>
-          <p style={{ margin: 0, fontSize: "0.9rem" }}>
-            POST JSON to your backend <code>/webhook</code>
-            {socketsOn
-              ? " — new events appear here via Socket.IO."
-              : " — then press Refresh to see them here."}
-          </p>
+          <p style={{ margin: 0 }}>No payloads yet.</p>
         </div>
       ) : (
         <div className="card-list">
           {records.map((r) => (
             <article key={r.id} className="card">
-              <div className="card__meta">
-                <span>
-                  <Link href={`/webhooks/${encodeURIComponent(r.id)}`}>
-                    View detail
-                  </Link>
-                </span>
-                <span>
-                  <code>{r.id}</code>
-                </span>
-                <span>{new Date(r.createdAt).toLocaleString()}</span>
+              <div className="card__row">
+                <button
+                  type="button"
+                  className="card__expand"
+                  onClick={() => setPanelRecord(r)}
+                  aria-label="Open payload details"
+                >
+                  <div className="card__meta">
+                    <p className="card__meta-line">
+                      <span className="card__meta-k">Webhook ID:</span>{" "}
+                      <code className="field-value__id">{r.id}</code>
+                    </p>
+                    <p className="card__meta-line">
+                      <span className="card__meta-k">Created at:</span>{" "}
+                      {new Date(r.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="card__preview">{previewPayload(r.webhookData)}</div>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--primary btn--compact"
+                  onClick={(e) => void copyRecordPayload(r, e)}
+                  aria-label="Copy JSON payload to clipboard"
+                >
+                  Copy
+                </button>
               </div>
-              <div className="card__preview">{previewPayload(r.webhookData)}</div>
             </article>
           ))}
         </div>

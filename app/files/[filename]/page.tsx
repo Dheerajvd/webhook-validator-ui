@@ -5,9 +5,12 @@ import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { fetchBackupFile } from "@/lib/api-client";
 import type { WebhookRecord } from "@/lib/types";
+import { apiErrorMessage } from "@/lib/api-error";
+import { useToast } from "@/components/toast-provider";
 import { JsonPanel } from "@/components/json-panel";
 
 export default function BackupFileDetailPage() {
+  const { showToast } = useToast();
   const params = useParams();
   const filename =
     typeof params.filename === "string"
@@ -27,11 +30,13 @@ export default function BackupFileDetailPage() {
         const env = await fetchBackupFile(filename);
         if (cancelled) return;
         if (env.status !== 200) {
-          setError(
-            typeof env.data === "object" && env.data && "message" in env.data
-              ? String((env.data as { message: string }).message)
-              : `Error ${env.status}`
+          const msg = apiErrorMessage(
+            env.status,
+            env.data,
+            `Error ${env.status}`
           );
+          setError(msg);
+          showToast(msg, "error");
           setRecords([]);
           return;
         }
@@ -39,7 +44,11 @@ export default function BackupFileDetailPage() {
           setRecords(env.data.records);
         }
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) {
+          const msg = e instanceof Error ? e.message : String(e);
+          setError(msg);
+          showToast(msg, "error");
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -47,7 +56,7 @@ export default function BackupFileDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [filename]);
+  }, [filename, showToast]);
 
   return (
     <>
@@ -56,13 +65,13 @@ export default function BackupFileDetailPage() {
       </p>
       <h1 className="page-title">Backup file</h1>
       <p className="page-lede">
-        <code>{filename}</code> — loaded with <code>GET /files/:filename</code>
+        <code>{filename}</code>
       </p>
 
       {loading ? (
         <p className="page-lede">Loading…</p>
       ) : error ? (
-        <div className="error-banner">{error}</div>
+        <div className="empty-state">{error}</div>
       ) : (
         <>
           <p style={{ color: "var(--muted)", marginTop: 0 }}>

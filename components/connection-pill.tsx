@@ -14,10 +14,10 @@ export function ConnectionPill(props: Props) {
     return (
       <span
         className="connection-pill connection-pill--http"
-        title="Socket.IO disabled — use Refresh to load latest from GET /webhook"
+        title="Use Refresh to load the latest payloads"
       >
         <span className="connection-pill__dot" aria-hidden />
-        HTTP only
+        Manual refresh
       </span>
     );
   }
@@ -26,7 +26,7 @@ export function ConnectionPill(props: Props) {
   return (
     <span
       className={`connection-pill ${connected ? "connection-pill--on" : "connection-pill--off"}`}
-      title={connected ? "Socket.IO connected" : "Socket.IO disconnected"}
+      title={connected ? "Receiving live updates" : "Live updates unavailable"}
     >
       <span className="connection-pill__dot" aria-hidden />
       {connected ? "Live" : "Offline"}
